@@ -1,19 +1,19 @@
 from flask import Flask, request
 import os
 
-האַפּליקַציָה = Flask(__name__)
+app = Flask(__name__)
 
-אסימון_אימות = "tayriToken2025"
+VERIFY_TOKEN = "tayriToken2025"
 
-@האַפּליקַציָה.route('/', methods=['GET'])
-def אימות():
-    אסימון = request.args.get('hub.verify_token')
-    if אסימון == אסימון_אימות:
+@app.route('/', methods=['GET'])
+def verify():
+    token = request.args.get('hub.verify_token')
+    if token == VERIFY_TOKEN:
         return request.args.get('hub.challenge'), 200
-    return 'Error', 403
+    return 'Error: Invalid verification token', 403
 
-@האַפּליקַציָה.route('/', methods=['POST'])
-def קליטה():
-    מידע = request.get_json()
-    print("📩 קיבלתי מידע:", מידע)
-    return "Received", 200
+@app.route('/webhook', methods=['POST'])
+def webhook():
+    data = request.get_json()
+    print("📩 קיבלנו מידע:", data)
+    return 'Received', 200
