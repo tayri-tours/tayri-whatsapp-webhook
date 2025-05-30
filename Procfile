@@ -1,1 +1,1 @@
-web: gunicorn webhook:האַפּליקַציָה
+web: gunicorn webhook:app
