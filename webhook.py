@@ -3,7 +3,7 @@ import os
 
 app = Flask(__name__)
 
-VERIFY_TOKEN = "tayriToken2025"
+VERIFY_TOKEN = os.environ.get("VERIFY_TOKEN")
 
 @app.route('/', methods=['GET'])
 def verify():
