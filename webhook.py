@@ -3,7 +3,7 @@ import os
 
 app = Flask(__name__)
 
-VERIFY_TOKEN = os.environ.get('VERIFY_TOKEN')
+VERIFY_TOKEN = request.args.get('hub.verify_token')
 
 @app.route('/', methods=['GET'])
 def verify():
