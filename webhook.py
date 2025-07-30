@@ -3,20 +3,27 @@ import os
 
 app = Flask(__name__)
 
-VERIFY_TOKEN = os.environ.get("VERIFY_TOKEN")
+VERIFY_TOKEN = os.environ.get('VERIFY_TOKEN')
 
 @app.route('/', methods=['GET'])
 def verify():
+    mode = request.args.get('hub.mode')
     token = request.args.get('hub.verify_token')
-    if token == VERIFY_TOKEN:
-        return request.args.get('hub.challenge'), 200
-    return 'Error: Invalid verification token', 403
+    challenge = request.args.get('hub.challenge')
+
+    if mode and token:
+        if token == VERIFY_TOKEN:
+            return challenge, 200
+        else:
+            return 'Error: Invalid verification token', 403
+    return 'Error: Missing parameters', 400
 
 @app.route('/webhook', methods=['POST'])
 def webhook():
     data = request.get_json()
-    print("📩 קיבלנו מידע:", data)
+    print("📩 קיבלנו פוסט:", data)
     return 'Received', 200
-if __name__ == "__main__": 
-    port = int(os.environ.get("PORT", 5000))  # ברנדר יכניס את הפורט הנכון
+
+if __name__ == '__main__':
+    port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port)
