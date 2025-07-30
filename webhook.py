@@ -3,7 +3,7 @@ import os
 
 app = Flask(__name__)
 
-VERIFY_TOKEN = request.args.get('hub.verify_token')
+VERIFY_TOKEN = os.environ.get('VERIFY_TOKEN', 'tayribot')
 
 @app.route('/', methods=['GET'])
 def verify():
@@ -21,9 +21,9 @@ def verify():
 @app.route('/webhook', methods=['POST'])
 def webhook():
     data = request.get_json()
-    print("📩 קיבלנו פוסט:", data)
+    print("📩 התקבלה הודעה:", data)
     return 'Received', 200
 
 if __name__ == '__main__':
-    port = int(os.environ.get("PORT", 5000))
-    app.run(host="0.0.0.0", port=port)
+    port = int(os.environ.get('PORT', 5000))
+    app.run(host='0.0.0.0', port=port)
