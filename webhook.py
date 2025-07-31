@@ -3,7 +3,7 @@ import os
 
 app = Flask(__name__)
 
-VERIFY_TOKEN = os.environ.get("VERIFY_TOKEN", "tayribot")  # ברירת מחדל אם לא הוגדר משתנה סביבה
+VERIFY_TOKEN = os.environ.get("VERIFY_TOKEN", "tayribot")
 
 @app.route('/', methods=['GET', 'POST'])
 @app.route('/webhook', methods=['GET', 'POST'])
@@ -27,9 +27,13 @@ def webhook():
             print("⚠️ שגיאה:", e)
             return 'ERROR', 500
 
-    # מקרה נדיר שלא הגיע GET ולא POST (למרות שהגדרנו)
     return 'Invalid request method', 405
+
+@app.before_request
+def log_all_requests():
+    print(f"📥 התקבלה בקשה: {request.method} {request.path}")
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port)
+
