@@ -13,15 +13,19 @@ def webhook():
         challenge = request.args.get("hub.challenge")
 
         if mode == "subscribe" and token == VERIFY_TOKEN:
-            print("WEBHOOK_VERIFIED")
+            print("WEBHOOK_VERIFIED ✅")
             return challenge, 200
         else:
+            print("❌ Invalid token or mode")
             return "Error: Invalid verification token", 403
 
     elif request.method == "POST":
         data = request.get_json()
-        print("Received webhook data:", data)
+        print("📥 Received webhook data:", data)
         return "EVENT_RECEIVED", 200
+
+    else:
+        return "Method not allowed", 405
 
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 5000))
