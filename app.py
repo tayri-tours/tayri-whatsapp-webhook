@@ -1,36 +1,31 @@
 from flask import Flask, request
-import requests
-import os
+import requests, os, re
 from datetime import datetime
 import pytz
-import re
 
 app = Flask(__name__)
 
 # ===== הגדרות =====
-VERIFY_TOKEN = "tayribot"
-ACCESS_TOKEN = os.environ.get("WHATSAPP_TOKEN")   # D360-API-KEY של 360dialog
+VERIFY_TOKEN = "tayribot"                                  # חייב להתאים למה שהגדרת
+ACCESS_TOKEN = os.environ.get("WHATSAPP_TOKEN", "").strip()  # D360-API-KEY של 360dialog
 REPLIED_USERS = set()
-LOG_FILE = "log.txt"
-ORDERS_FILE = "orders.txt"
 
-# ===== Route יחיד: שורש בלבד (כמו ב-Callback של 360dialog) =====
-@app.route("/", methods=["GET", "POST"])
-def webhook():
+# ===== נתיב כללי: שורש + כל path (מונע 404 מכל כתובת) =====
+@app.route("/", defaults={"path": ""}, methods=["GET", "POST"])
+@app.route("/<path:path>", methods=["GET", "POST"])
+def webhook(path):
     if request.method == "GET":
         token = request.args.get("hub.verify_token")
         challenge = request.args.get("hub.challenge")
         mode = request.args.get("hub.mode")
-        # אימות פשוט: אם הטוקן תואם – מחזירים את ה-challenge
         if mode == "subscribe" and token == VERIFY_TOKEN:
-            return challenge, 200
+            return (challenge or ""), 200
         return "Verification failed", 403
 
-    # POST – חשוב: תמיד להחזיר 200 כדי לא לחסום משלוחים
+    # POST – תמיד 200 כדי לא לחסום משלוחים
     data = request.get_json(silent=True) or {}
-    print("📩 Incoming POST to / :", data)
+    print(f"📩 Incoming POST to /{path} :", data)
     try:
-        log_to_file(data)
         process_message(data)
     except Exception as e:
         print("❌ Error processing:", e)
@@ -47,19 +42,23 @@ def process_message(data):
         return
 
     msg = messages[0]
-    phone = msg.get("from")
+    phone = msg.get("from", "unknown")
     name = (msg.get("profile") or {}).get("name", "לא ידוע")
     body = (msg.get("text") or {}).get("body", "[לא טקסט]")
 
     print(f"\n📨 הודעה מ: {name} ({phone})")
     print(f"🕒 {get_time()} | 💬 {body}")
 
-    # אם ההודעה הראשונה מכילה את כל פרטי ההזמנה – מעבירים לבדיקה
+    # הזמנה מלאה? שמירה ללוג בלבד (אפשר להחליף בהמשך לדוא״ל/CRM)
     if is_complete_booking(body):
-        send_to_admin(phone, name, body)
+        summary = (
+            f"📥 הזמנה מלאה מהלקוח {name} ({phone}):\n\n{body}\n\n"
+            f"🕒 התקבלה: {get_time()}"
+        )
+        print("📌 זוהתה הזמנה מלאה >> לבדיקת מנהל:\n" + summary)
         return
 
-    # אחרת – מענה פתיחה חכם פעם אחת בלבד
+    # אחרת – מענה פתיחה חכם פעם אחת
     if phone not in REPLIED_USERS:
         lang = detect_language(body)
         reply = opening_reply(lang)
@@ -70,25 +69,14 @@ def process_message(data):
 # ===== זיהוי אם הטקסט כולל כל רכיבי ההזמנה =====
 def is_complete_booking(text: str) -> bool:
     checks = [
-        r"\b\d{1,2}/\d{1,2}/\d{2,4}\b",        # תאריך: 1/8/2025 וכד'
+        r"\b\d{1,2}/\d{1,2}/\d{2,4}\b",        # תאריך: 1/8/2025
         r"\b\d{1,2}:\d{2}\b",                  # שעה: 05:30
-        r"(איסוף|מ(?:[ן]|־)|מרחוב|מרח׳)",      # כתובת איסוף (מ/מאיסוף/מרחוב)
+        r"(איסוף|מ(?:[ן]|־)|מרחוב|מרח׳)",      # נק׳ איסוף
         r"(יעד|ל(?:[־ ]|))",                   # יעד / ל־
-        r"\b(\d+)\s*נוסע(?:ים|ות)?",           # מספר נוסעים
-        r"\b(\d+)\s*מזוודות?",                 # מספר מזוודות
+        r"\b(\d+)\s*נוסע(?:ים|ות)?",           # נוסעים
+        r"\b(\d+)\s*מזוודות?",                 # מזוודות
     ]
     return all(re.search(p, text) for p in checks)
-
-
-# ===== שליחת סיכום אליך (כעת ללוג + קובץ; אפשר להרחיב לאימייל/טלגרם) =====
-def send_to_admin(phone, name, text):
-    summary = (
-        f"📥 הזמנה מלאה מהלקוח {name} ({phone}):\n\n{text}\n\n"
-        f"🕒 התקבלה: {get_time()}"
-    )
-    print("📌 זוהתה הזמנה מלאה >> נשמרת לבדיקת מנהל:\n" + summary)
-    with open(ORDERS_FILE, "a", encoding="utf-8") as f:
-        f.write(summary + "\n\n")
 
 
 # ===== זיהוי שפה + תשובת פתיחה =====
@@ -112,6 +100,9 @@ def opening_reply(lang):
 
 # ===== שליחת הודעה דרך 360dialog =====
 def send_reply(phone, text):
+    if not ACCESS_TOKEN:
+        print("⚠️ Missing WHATSAPP_TOKEN (D360-API-KEY) – cannot send reply")
+        return
     url = "https://waba-v2.360dialog.io/v1/messages"
     headers = {
         "D360-API-KEY": ACCESS_TOKEN,
@@ -129,19 +120,6 @@ def send_reply(phone, text):
         print("❌ Error sending reply:", e)
 
 
-# ===== תיעוד קבצים =====
-def log_to_file(data):
-    try:
-        msg = (data.get("entry") or [{}])[0].get("changes", [{}])[0].get("value", {}).get("messages", [{}])[0]
-        phone = msg.get("from", "unknown")
-        name = (msg.get("profile") or {}).get("name", "לא ידוע")
-        body = (msg.get("text") or {}).get("body", "[לא טקסט]")
-        with open(LOG_FILE, "a", encoding="utf-8") as f:
-            f.write(f"[{get_time()}] {name} ({phone}): {body}\n")
-    except Exception as e:
-        print("❌ Error writing log:", e)
-
-
 # ===== שעה ישראל =====
 def get_time():
     return datetime.now(pytz.timezone("Asia/Jerusalem")).strftime("%Y-%m-%d %H:%M:%S")
@@ -149,6 +127,5 @@ def get_time():
 
 # ===== הפעלה =====
 if __name__ == "__main__":
-    # ברנדר מוסיף PORT כ-ENV; בריצה לוקאלית 5000
     port = int(os.environ.get("PORT", "5000"))
     app.run(host="0.0.0.0", port=port)
