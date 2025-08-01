@@ -406,14 +406,58 @@ def debug_openai():
 
 @app.route("/debug/360")  # /debug/360?to=9725XXXXXXX&text=בדיקה
 def debug_360():
+    """Send a direct test via 360dialog and return full diagnostics instead of just ok/false."""
     if not D360_API_KEY:
         return jsonify(ok=False, error="D360_API_KEY missing"), 500
     to = request.args.get("to")
     text = request.args.get("text", "בדיקה")
     if not to:
         return jsonify(ok=False, error="missing ?to=9725XXXXXXX"), 400
-    ok = send_via_360(to, text)
-    return jsonify(ok=ok)
+
+    # Try with and without '+' and with both endpoints
+    digits = re.sub(r"[^0-9]", "", str(to))
+    tos = [digits, "+" + digits]
+    urls = [
+        "https://waba-v2.360dialog.io/v1/messages",
+        "https://waba.360dialog.io/v1/messages",
+    ]
+    headers = {
+        "D360-API-KEY": D360_API_KEY,
+        "Content-Type": "application/json",
+        "Accept": "application/json",
+    }
+
+    attempts = []
+    for url in urls:
+        for send_to in tos:
+            payload = {"to": send_to, "type": "text", "text": {"body": str(text)}}
+            try:
+                r = requests.post(url, headers=headers, json=payload, timeout=20)
+                try:
+                    body_json = r.json()
+                except Exception:
+                    body_json = {"raw": r.text}
+                trace_id = None
+                if isinstance(body_json, dict):
+                    trace_id = body_json.get("360dialog_trace_id") or body_json.get("meta", {}).get("trace_id")
+                attempts.append({
+                    "url": url,
+                    "to": send_to,
+                    "status": r.status_code,
+                    "trace_id": trace_id,
+                    "body": body_json,
+                })
+                if r.status_code in (200, 201):
+                    return jsonify(ok=True, attempt=attempts[-1], attempts=attempts)
+            except Exception as e:
+                attempts.append({
+                    "url": url,
+                    "to": send_to,
+                    "status": None,
+                    "error": str(e),
+                })
+
+    return jsonify(ok=False, attempts=attempts), 502
 
 
 if __name__ == "__main__":
