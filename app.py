@@ -6,11 +6,12 @@ import pytz
 app = Flask(__name__)
 
 # ===== הגדרות =====
-VERIFY_TOKEN  = "tayribot"                                  # אותו טוקן שהגדרת ב-360dialog
-ACCESS_TOKEN  = os.environ.get("WHATSAPP_TOKEN", "").strip()# D360-API-KEY של 360dialog
-REPLIED_USERS = set()
+VERIFY_TOKEN    = "tayribot"                                      # חייב להתאים למה שהגדרת
+ACCESS_TOKEN    = os.environ.get("WHATSAPP_TOKEN", "").strip()     # Meta Cloud Bearer או D360-API-KEY
+PHONE_NUMBER_ID = os.environ.get("PHONE_NUMBER_ID", "").strip()    # אם קיים -> נשלח דרך Cloud
+REPLIED_USERS   = set()
 
-# ===== נתיב כללי: "/" וגם כל path (מונע 404 מכל כתובת) =====
+# ===== נתיב כללי: "/" וגם כל path (מונע 404) =====
 @app.route("/", defaults={"path": ""}, methods=["GET", "POST"])
 @app.route("/<path:path>", methods=["GET", "POST"])
 def webhook(path):
@@ -41,23 +42,23 @@ def process_message(data):
         return
 
     msg   = messages[0]
-    phone = msg.get("from", "unknown")  # זה ה-wa_id שמגיע מה־Inbound
+    phone = msg.get("from", "unknown")                  # זה wa_id מה‑Inbound
     name  = extract_name(value, msg)
     body  = (msg.get("text") or {}).get("body", "[לא טקסט]")
 
     print(f"\n📨 הודעה מ: {name} ({phone})")
     print(f"🕒 {get_time()} | 💬 {body}")
 
-    # הזמנה מלאה? תיעוד בלבד (אפשר להרחיב מאוחר יותר)
+    # הזמנה מלאה? תיעוד (אפשר להרחיב בהמשך)
     if is_complete_booking(body):
         print("📌 זוהתה הזמנה מלאה – מועבר לבדיקת מנהל בלבד.")
         return
 
     # תשובת פתיחה פעם אחת
     if phone not in REPLIED_USERS:
-        lang   = detect_language(body)
-        reply  = opening_reply(lang)
-        send_reply(phone, reply)  # נשלח עם fallback אוטומטי
+        lang  = detect_language(body)
+        reply = opening_reply(lang)
+        send_reply_auto(phone, reply, value)            # <<< שליחה אוטומטית: Cloud או 360
         REPLIED_USERS.add(phone)
 
 
@@ -103,28 +104,62 @@ def opening_reply(lang):
     )
 
 
-# ===== שליחה עם Fallback (דומיין + פורמט מספר) =====
-def send_reply(phone_wa_id, text):
+# ===== שליחה אוטומטית: Cloud (אם יש PHONE_NUMBER_ID) או 360dialog =====
+def send_reply_auto(phone_wa_id, text, value):
     if not ACCESS_TOKEN:
-        print("⚠️ Missing WHATSAPP_TOKEN (D360-API-KEY) – cannot send reply")
+        print("⚠️ Missing WHATSAPP_TOKEN – cannot send reply")
         return
 
+    # אם יש PHONE_NUMBER_ID – נשלח ב‑Meta Cloud (Graph API)
+    if PHONE_NUMBER_ID:
+        ok = send_via_cloud(phone_wa_id, text)
+        if ok:
+            return
+        # אם מסיבה כלשהי נכשל – ננסה גם דרך 360 כ‑fallback
+        print("↪️ Cloud send failed – trying 360dialog fallback...")
+
+    send_via_360(phone_wa_id, text)
+
+
+# ----- Meta Cloud API -----
+def send_via_cloud(phone_wa_id, text) -> bool:
+    url = f"https://graph.facebook.com/v18.0/{PHONE_NUMBER_ID}/messages"
+    headers = {
+        "Authorization": f"Bearer {ACCESS_TOKEN}",
+        "Content-Type": "application/json",
+        "Accept": "application/json",
+    }
+    payload = {
+        "messaging_product": "whatsapp",
+        "to": str(phone_wa_id),            # ה‑wa_id שמגיע מה‑Inbound
+        "type": "text",
+        "text": {"preview_url": False, "body": str(text)},
+    }
+    try:
+        r = requests.post(url, headers=headers, json=payload, timeout=20)
+        print(f"➡️  Cloud → {url} | payload={payload}")
+        print(f"📤 Cloud response → {r.status_code} | {r.text}")
+        return r.status_code in (200, 201)
+    except Exception as e:
+        print("❌ Error sending via Cloud:", e)
+        return False
+
+
+# ----- 360dialog API -----
+def send_via_360(phone_wa_id, text) -> bool:
     urls = [
         "https://waba-v2.360dialog.io/v1/messages",
         "https://waba.360dialog.io/v1/messages",
     ]
     tos = [str(phone_wa_id)]
     if not str(phone_wa_id).startswith("+"):
-        tos.append("+" + str(phone_wa_id))  # נסה גם עם פלוס
+        tos.append("+" + str(phone_wa_id))  # לפעמים נדרש עם פלוס
 
     headers = {
         "D360-API-KEY": ACCESS_TOKEN,
         "Content-Type": "application/json",
         "Accept": "application/json",
     }
-
-    last_status = None
-    last_text   = None
 
     for url in urls:
         for to in tos:
@@ -135,17 +170,15 @@ def send_reply(phone_wa_id, text):
                 "text": {"body": str(text), "preview_url": False},
             }
             try:
-                r = requests.post(url, headers=headers, json=payload, timeout=15)
-                last_status, last_text = r.status_code, r.text
-                print(f"➡️  Outgoing → {url} | to={to} | payload={payload}")
-                print(f"📤 Reply sent → {r.status_code} | {r.text}")
+                r = requests.post(url, headers=headers, json=payload, timeout=20)
+                print(f"➡️  360 → {url} | to={to} | payload={payload}")
+                print(f"📤 360 response → {r.status_code} | {r.text}")
                 if r.status_code in (200, 201):
-                    return
+                    return True
             except Exception as e:
-                print(f"❌ Error sending via {url} | to={to}: {e}")
-
-    # אם הגענו לכאן – עדיין לא הצליח; יש לנו סטטוס/תשובה אחרונים ללוג
-    print(f"⛔ Failed to send. Last status: {last_status} | body: {last_text}")
+                print(f"❌ Error sending via 360 ({url}):", e)
+    print("⛔ Failed to send via 360dialog")
+    return False
 
 
 # ===== שעה ישראל =====
@@ -157,3 +190,4 @@ def get_time():
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", "5000"))
     app.run(host="0.0.0.0", port=port)
+
