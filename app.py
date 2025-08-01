@@ -4,16 +4,17 @@ import json
 import os
 from datetime import datetime
 import pytz
+import re
 
 app = Flask(__name__)
 
+# הגדרות כלליות
 VERIFY_TOKEN = "tayribot"
 ACCESS_TOKEN = os.environ.get("WHATSAPP_TOKEN")
-PHONE_NUMBER_ID = os.environ.get("PHONE_NUMBER_ID")
-
 REPLIED_USERS = set()
 
 @app.route("/", methods=["GET", "POST"])
+@app.route("/webhook", methods=["GET", "POST"])
 def webhook():
     if request.method == "GET":
         token = request.args.get("hub.verify_token")
@@ -40,20 +41,47 @@ def process_message(data):
 
         message = messages[0]
         phone = message["from"]
-        name = message["profile"]["name"]
+        name = message.get("profile", {}).get("name", "לא ידוע")
         body = message.get("text", {}).get("body", "[לא טקסט]")
 
         print(f"\n📨 הודעה מ: {name} ({phone})")
         print(f"🕒 {get_time()} | 💬 {body}")
 
-        if phone not in REPLIED_USERS:
+        if phone in REPLIED_USERS:
+            return
+
+        if is_complete_booking(body):
+            send_to_admin(phone, name, body)
+        else:
             lang = detect_language(body)
             reply = opening_reply(lang)
             send_reply(phone, reply)
-            REPLIED_USERS.add(phone)
+
+        REPLIED_USERS.add(phone)
 
     except Exception as e:
         print(f"❌ שגיאה: {e}")
+
+def is_complete_booking(text):
+    checks = [
+        r"\b\d{1,2}/\d{1,2}/\d{2,4}\b",  # תאריך
+        r"\b\d{1,2}:\d{2}\b",            # שעה
+        r"(איסוף|מ(?:[ן]|־)|מרחוב|מרח׳)",  # כתובת איסוף
+        r"(יעד|ל(?:[־ ]|))",             # יעד
+        r"\b(\d+)\s*נוסע(?:ים|ות)?",     # נוסעים
+        r"\b(\d+)\s*מזוודות?",           # מזוודות
+    ]
+    return all(re.search(pattern, text) for pattern in checks)
+
+def send_to_admin(phone, name, text):
+    summary = (
+        f"📥 הזמנה חדשה מהלקוח {name} ({phone}):\n\n{text}\n\n"
+        f"🕒 התקבלה בתאריך {get_time()}"
+    )
+    print("📌 זוהתה הזמנה מלאה >> מועברת לבדיקה:\n" + summary)
+    # כאן תוכל להחליף לשליחת אימייל, טלגרם, WhatsApp אחר – או רק תיעוד פנימי
+    with open("orders.txt", "a", encoding="utf-8") as f:
+        f.write(summary + "\n\n")
 
 def detect_language(text):
     heb_chars = set("אבגדהוזחטיכלמנסעפצקרשת")
@@ -105,4 +133,4 @@ def get_time():
     return datetime.now(pytz.timezone("Asia/Jerusalem")).strftime("%Y-%m-%d %H:%M:%S")
 
 if __name__ == "__main__":
-    app.run(port=5000)
+    app.run(host="0.0.0.0", port=5000)
