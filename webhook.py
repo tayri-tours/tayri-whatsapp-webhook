@@ -1,37 +1,39 @@
-from flask import Flask, request
+from flask import Flask, request, make_response
 import os
 
 app = Flask(__name__)
 
 VERIFY_TOKEN = os.environ.get("VERIFY_TOKEN", "tayribot")
 
-@app.route('/', methods=['GET', 'POST'])
-@app.route('/webhook', methods=['GET', 'POST'])
-def webhook():
-    if request.method == 'GET':
-        token = request.args.get('hub.verify_token')
-        challenge = request.args.get('hub.challenge')
-        mode = request.args.get('hub.mode')
-
-        if token == VERIFY_TOKEN and mode == 'subscribe':
-            return challenge, 200
-        else:
-            return 'Error: Invalid token or mode', 403
-
-    elif request.method == 'POST':
-        try:
-            data = request.get_json()
-            print("📩 קיבלתי מידע:", data)
-            return 'EVENT_RECEIVED', 200
-        except Exception as e:
-            print("⚠️ שגיאה:", e)
-            return 'ERROR', 500
-
-    return 'Invalid request method', 405
-
 @app.before_request
 def log_all_requests():
-    print(f"📥 התקבלה בקשה: {request.method} {request.path}")
+    print(f"\n📥 בקשה נכנסת: {request.method} {request.path}")
+    if request.method == "POST":
+        try:
+            print("📨 תוכן POST:", request.get_json())
+        except:
+            print("⚠️ שגיאת ניתוח JSON")
+
+@app.route("/", methods=["GET", "POST", "HEAD"])
+@app.route("/webhook", methods=["GET", "POST", "HEAD"])
+def webhook():
+    if request.method == "GET":
+        token = request.args.get("hub.verify_token")
+        challenge = request.args.get("hub.challenge")
+        mode = request.args.get("hub.mode")
+        
+        if token == VERIFY_TOKEN and mode == "subscribe":
+            return make_response(challenge, 200)
+        else:
+            return make_response("❌ אימות נכשל", 403)
+
+    elif request.method == "POST":
+        return make_response("EVENT_RECEIVED", 200)
+
+    elif request.method == "HEAD":
+        return make_response("", 200)  # מאפשר בדיקות זמינות מ-Meta
+
+    return make_response("Method Not Allowed", 405)
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
