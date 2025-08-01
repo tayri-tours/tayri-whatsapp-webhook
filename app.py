@@ -6,8 +6,8 @@ import pytz
 app = Flask(__name__)
 
 # ===== הגדרות =====
-VERIFY_TOKEN = "tayribot"                                   # אותו טוקן שהגדרת ב-360dialog
-ACCESS_TOKEN = os.environ.get("WHATSAPP_TOKEN", "").strip() # D360-API-KEY של 360dialog
+VERIFY_TOKEN  = "tayribot"                                  # אותו טוקן שהגדרת ב-360dialog
+ACCESS_TOKEN  = os.environ.get("WHATSAPP_TOKEN", "").strip()# D360-API-KEY של 360dialog
 REPLIED_USERS = set()
 
 # ===== נתיב כללי: "/" וגם כל path (מונע 404 מכל כתובת) =====
@@ -15,14 +15,13 @@ REPLIED_USERS = set()
 @app.route("/<path:path>", methods=["GET", "POST"])
 def webhook(path):
     if request.method == "GET":
-        token = request.args.get("hub.verify_token")
+        token     = request.args.get("hub.verify_token")
         challenge = request.args.get("hub.challenge")
-        mode = request.args.get("hub.mode")
+        mode      = request.args.get("hub.mode")
         if mode == "subscribe" and token == VERIFY_TOKEN:
             return (challenge or ""), 200
         return "Verification failed", 403
 
-    # POST – תמיד 200 כדי לא לחסום משלוחים
     data = request.get_json(silent=True) or {}
     print(f"📩 Incoming POST to /{path} :", data)
     try:
@@ -34,39 +33,35 @@ def webhook(path):
 
 # ===== עיבוד הודעה =====
 def process_message(data):
-    entry = (data.get("entry") or [{}])[0]
-    change = (entry.get("changes") or [{}])[0]
-    value = change.get("value", {})
+    entry    = (data.get("entry") or [{}])[0]
+    change   = (entry.get("changes") or [{}])[0]
+    value    = change.get("value", {})
     messages = value.get("messages", [])
     if not messages:
         return
 
     msg   = messages[0]
-    phone = msg.get("from", "unknown")
-    name  = extract_name(value, msg)                     # זיהוי שם הלקוח
+    phone = msg.get("from", "unknown")  # זה ה-wa_id שמגיע מה־Inbound
+    name  = extract_name(value, msg)
     body  = (msg.get("text") or {}).get("body", "[לא טקסט]")
 
     print(f"\n📨 הודעה מ: {name} ({phone})")
     print(f"🕒 {get_time()} | 💬 {body}")
 
-    # הזמנה מלאה? (תאריך, שעה, איסוף, יעד, נוסעים, מזוודות) – רק תיעוד ללוג כרגע
+    # הזמנה מלאה? תיעוד בלבד (אפשר להרחיב מאוחר יותר)
     if is_complete_booking(body):
-        summary = (
-            f"📥 הזמנה מלאה מהלקוח {name} ({phone}):\n\n{body}\n\n"
-            f"🕒 התקבלה: {get_time()}"
-        )
-        print("📌 זוהתה הזמנה מלאה >> לבדיקת מנהל:\n" + summary)
+        print("📌 זוהתה הזמנה מלאה – מועבר לבדיקת מנהל בלבד.")
         return
 
-    # אחרת – מענה פתיחה חכם פעם אחת
+    # תשובת פתיחה פעם אחת
     if phone not in REPLIED_USERS:
-        lang = detect_language(body)
-        reply = opening_reply(lang)
-        send_reply(phone, reply)
+        lang   = detect_language(body)
+        reply  = opening_reply(lang)
+        send_reply(phone, reply)  # נשלח עם fallback אוטומטי
         REPLIED_USERS.add(phone)
 
 
-# ===== זיהוי שם הלקוח (contacts -> message.profile -> מספר) =====
+# ===== זיהוי שם הלקוח =====
 def extract_name(value, msg):
     name = ((value.get("contacts") or [{}])[0].get("profile") or {}).get("name")
     if not name:
@@ -79,8 +74,8 @@ def extract_name(value, msg):
 # ===== זיהוי אם הטקסט כולל כל רכיבי ההזמנה =====
 def is_complete_booking(text: str) -> bool:
     checks = [
-        r"\b\d{1,2}/\d{1,2}/\d{2,4}\b",        # תאריך: 1/8/2025
-        r"\b\d{1,2}:\d{2}\b",                  # שעה: 05:30
+        r"\b\d{1,2}/\d{1,2}/\d{2,4}\b",        # תאריך
+        r"\b\d{1,2}:\d{2}\b",                  # שעה
         r"(איסוף|מ(?:[ן]|־)|מרחוב|מרח׳)",      # נק׳ איסוף
         r"(יעד|ל(?:[־ ]|))",                   # יעד / ל־
         r"\b(\d+)\s*נוסע(?:ים|ות)?",           # נוסעים
@@ -108,31 +103,49 @@ def opening_reply(lang):
     )
 
 
-# ===== שליחת הודעה דרך 360dialog (עם שדות נדרשים + לוג מלא) =====
-def send_reply(phone, text):
+# ===== שליחה עם Fallback (דומיין + פורמט מספר) =====
+def send_reply(phone_wa_id, text):
     if not ACCESS_TOKEN:
         print("⚠️ Missing WHATSAPP_TOKEN (D360-API-KEY) – cannot send reply")
         return
 
-    url = "https://waba-v2.360dialog.io/v1/messages"
+    urls = [
+        "https://waba-v2.360dialog.io/v1/messages",
+        "https://waba.360dialog.io/v1/messages",
+    ]
+    tos = [str(phone_wa_id)]
+    if not str(phone_wa_id).startswith("+"):
+        tos.append("+" + str(phone_wa_id))  # נסה גם עם פלוס
+
     headers = {
         "D360-API-KEY": ACCESS_TOKEN,
         "Content-Type": "application/json",
         "Accept": "application/json",
     }
-    payload = {
-        "to": str(phone),
-        "recipient_type": "individual",
-        "type": "text",
-        "text": {"body": str(text), "preview_url": False},
-    }
 
-    try:
-        r = requests.post(url, headers=headers, json=payload, timeout=15)
-        print("➡️  Outgoing payload:", payload)
-        print(f"📤 Reply sent → {r.status_code} | {r.text}")
-    except Exception as e:
-        print("❌ Error sending reply:", e)
+    last_status = None
+    last_text   = None
+
+    for url in urls:
+        for to in tos:
+            payload = {
+                "to": to,
+                "recipient_type": "individual",
+                "type": "text",
+                "text": {"body": str(text), "preview_url": False},
+            }
+            try:
+                r = requests.post(url, headers=headers, json=payload, timeout=15)
+                last_status, last_text = r.status_code, r.text
+                print(f"➡️  Outgoing → {url} | to={to} | payload={payload}")
+                print(f"📤 Reply sent → {r.status_code} | {r.text}")
+                if r.status_code in (200, 201):
+                    return
+            except Exception as e:
+                print(f"❌ Error sending via {url} | to={to}: {e}")
+
+    # אם הגענו לכאן – עדיין לא הצליח; יש לנו סטטוס/תשובה אחרונים ללוג
+    print(f"⛔ Failed to send. Last status: {last_status} | body: {last_text}")
 
 
 # ===== שעה ישראל =====
