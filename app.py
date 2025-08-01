@@ -1,5 +1,5 @@
 from flask import Flask, request, jsonify
-import os, re, requests
+import os, re, requests, json
 from datetime import datetime
 import pytz
 
@@ -148,36 +148,31 @@ BOOKING_SCHEMA = {
 }
 
 def extract_with_openai(text: str, lang: str) -> dict:
-    """Use OpenAI Responses API with JSON schema; fallback to regex on any failure."""
+    """חילוץ פרטי נסיעה באמצעות Chat Completions במצב JSON – תואם לאחור לגרסאות openai שונות."""
     try:
         system = (
-            "You extract ride booking details into JSON fields: "
-            "date (DD/MM/YYYY), time (HH:MM), pickup, destination, passengers, luggage. "
-            "If something is missing, omit it."
+            "Return ONLY a JSON object with these keys (omit missing): "
+            "date (DD/MM/YYYY), time (HH:MM), pickup, destination, passengers, luggage."
         )
         user = f"טקסט לקוח: {text}" if lang == "he" else f"Customer text: {text}"
 
-        resp = client.responses.create(
-            model="gpt-4.1-mini",
-            input=[
+        # שימוש ב-Chat Completions במקום Responses API – בטוח לגרסאות ישנות
+        resp = client.chat.completions.create(
+            model="gpt-4o-mini",  # אפשר גם gpt-4.1-mini אם זמין
+            messages=[
                 {"role": "system", "content": system},
                 {"role": "user", "content": user},
             ],
-            response_format={"type": "json_schema", "json_schema": BOOKING_SCHEMA},
+            response_format={"type": "json_object"},
+            temperature=0,
         )
 
-        # Try to access parsed JSON; otherwise parse text/fallback
-        try:
-            out = resp.output[0].content[0].json  # when SDK provides JSON object
-        except Exception:
-            out = getattr(resp, "output_text", None)
-
-        if isinstance(out, dict):
-            return normalize_fields(out)
-        return extract_with_regex(str(out) if out is not None else text)
+        raw = resp.choices[0].message.content or "{}"
+        data = json.loads(raw)
+        return normalize_fields(data)
 
     except Exception as e:
-        print("⚠️ OpenAI extract error:", e)
+        print("⚠️ OpenAI extract error (chat):", e)
         return extract_with_regex(text)
 
 
@@ -327,11 +322,24 @@ def extract_name(value, msg):
 # =========================
 
 def send_reply_auto(wa_id, text):
+    attempted = False
     # Prefer Cloud only if both token & phone-id exist
     if CLOUD_TOKEN and CLOUD_PHONE_NUMBER_ID:
+        attempted = True
         if send_via_cloud(wa_id, text):
             return
         print("↪️ Cloud send failed – trying 360dialog fallback…")
+
+    # Fallback / primary for 360dialog
+    if D360_API_KEY:
+        attempted = True
+        if send_via_360(wa_id, text):
+            return
+
+    if attempted:
+        print("⛔ All send attempts failed (Cloud/360)")
+    else:
+        print("⛔ No WhatsApp sender configured (set D360_API_KEY or WHATSAPP_CLOUD_TOKEN+CLOUD_PHONE_NUMBER_ID)")
 
     # Fallback / primary for 360dialog
     if D360_API_KEY:
@@ -366,7 +374,32 @@ def send_via_cloud(wa_id, text) -> bool:
 
 def send_via_360(wa_id, text) -> bool:
     # 360dialog expects E.164 number WITHOUT '+'
-    to = str(wa_id).lstrip("+")
+    to = re.sub(r"[^0-9]", "", str(wa_id))
+    urls = [
+        "https://waba-v2.360dialog.io/v1/messages",
+        "https://waba.360dialog.io/v1/messages",
+    ]
+    headers = {
+        "D360-API-KEY": D360_API_KEY,
+        "Content-Type": "application/json",
+        "Accept": "application/json",
+    }
+    payload_base = {
+        "type": "text",
+        "text": {"body": str(text)},  # מינימלי; ללא preview_url
+        "recipient_type": "individual",
+    }
+    for url in urls:
+        payload = {**payload_base, "to": to}
+        try:
+            r = requests.post(url, headers=headers, json=payload, timeout=20)
+            print(f"➡️  360 → {url} | payload={payload}")
+            print(f"📤 360 response → {r.status_code} | {r.text}")
+            if r.status_code in (200, 201):
+                return True
+        except Exception as e:
+            print("❌ Error sending via 360:", e)
+    return False
     url = "https://waba-v2.360dialog.io/v1/messages"
     headers = {
         "D360-API-KEY": D360_API_KEY,
@@ -417,3 +450,4 @@ def debug_openai():
 if __name__ == "__main__":
     # For local testing only; Render will use its own server
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
+
