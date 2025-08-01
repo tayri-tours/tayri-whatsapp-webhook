@@ -14,7 +14,6 @@ PHONE_NUMBER_ID = os.environ.get("PHONE_NUMBER_ID")
 REPLIED_USERS = set()
 
 @app.route("/", methods=["GET", "POST"])
-@app.route("/webhook", methods=["GET", "POST"])
 def webhook():
     if request.method == "GET":
         token = request.args.get("hub.verify_token")
@@ -75,7 +74,7 @@ def opening_reply(lang):
         )
 
 def send_reply(phone, text):
-    url = f"https://waba-v2.360dialog.io/v1/messages"
+    url = "https://waba-v2.360dialog.io/v1/messages"
     headers = {
         "D360-API-KEY": ACCESS_TOKEN,
         "Content-Type": "application/json"
