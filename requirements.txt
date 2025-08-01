@@ -1,4 +1,4 @@
 flask
-pytz
 requests
-gunicorn
+pytz
+openai>=1.30.0
