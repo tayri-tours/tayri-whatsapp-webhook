@@ -6,13 +6,13 @@ import pytz
 # =========================
 #        CONFIG
 # =========================
-# Webhook verification token (Meta/360)
+# Webhook verification token
 VERIFY_TOKEN = os.environ.get("VERIFY_TOKEN", "tayribot").strip()
 
-# 360dialog API key (mandatory when using 360 only)
+# 360dialog API key (REQUIRED when using 360dialog)
 D360_API_KEY = os.environ.get("D360_API_KEY", "").strip()
 
-# OpenAI (optional but recommended for smart extraction)
+# OpenAI (optional for smart extraction)
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", "").strip()
 client = None
 if OPENAI_API_KEY:
@@ -136,7 +136,7 @@ def extract_with_openai(text: str, lang: str) -> dict:
         user = f"טקסט לקוח: {text}" if lang == "he" else f"Customer text: {text}"
 
         resp = client.chat.completions.create(
-            model="gpt-4o-mini",  # אפשר גם gpt-4.1-mini אם זמין
+            model="gpt-4o-mini",  # או gpt-4.1-mini אם זמין
             messages=[
                 {"role": "system", "content": system},
                 {"role": "user", "content": user},
@@ -163,7 +163,7 @@ TIME_RE = r"\b(\d{1,2}:\d{2})\b"
 PICKUP_RE = r"(?:איסוף|מאיסוף|מ-|מ־|מ |מרחוב|מרח׳)\s*([^\n,]+)"
 DEST_RE = r"(?:יעד|ל |ל־)\s*([^\n,]+)"
 PAX_RE = r"\b(\d+)\s*נוסע(?:ים|ות)?\b"
-LUG_RE = r"\b(\ד+)\s*מזוודות?\b".replace("\ד","\d")  # תיקון תו דיגיט בעברית
+LUG_RE = r"\b(\d+)\s*מזוודות?\b"
 
 def extract_with_regex(text: str) -> dict:
     d = {}
@@ -256,12 +256,10 @@ def finalize_order(wa_id):
     ts = get_time()
 
     # Operational log (hook for CRM/Sheets/email)
-    print(
-        "👤 Inbound from:", f"{name} ({msisdn})"
-    )
+    print("👤 Inbound from:", f"{name} ({msisdn})")
     print(
         "🗂 Order captured:\n"
-        + f"לקוח: {name} ({msisdן}) | {ts}\n".replace("ן","d")  # תיקון הדפסה
+        + f"לקוח: {name} ({msisdn}) | {ts}\n"
         + f"תאריך: {d.get('date')} | שעה: {d.get('time')}\n"
         + f"איסוף: {d.get('pickup')} → יעד: {d.get('destination')}\n"
         + f"נוסעים: {d.get('passengers')} | מזוודות: {d.get('luggage')}\n---"
