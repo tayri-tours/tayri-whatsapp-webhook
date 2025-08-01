@@ -6,11 +6,11 @@ import pytz
 app = Flask(__name__)
 
 # ===== הגדרות =====
-VERIFY_TOKEN = "tayribot"                                   # חייב להתאים למה שהגדרת
+VERIFY_TOKEN = "tayribot"                                   # אותו טוקן שהגדרת ב-360dialog
 ACCESS_TOKEN = os.environ.get("WHATSAPP_TOKEN", "").strip() # D360-API-KEY של 360dialog
 REPLIED_USERS = set()
 
-# ===== נתיב כללי: תופס "/" וכל path (מונע 404) =====
+# ===== נתיב כללי: "/" וגם כל path (מונע 404 מכל כתובת) =====
 @app.route("/", defaults={"path": ""}, methods=["GET", "POST"])
 @app.route("/<path:path>", methods=["GET", "POST"])
 def webhook(path):
@@ -41,15 +41,15 @@ def process_message(data):
     if not messages:
         return
 
-    msg = messages[0]
+    msg   = messages[0]
     phone = msg.get("from", "unknown")
-    name  = extract_name(value, msg)             # <<< תיקון זיהוי שם הלקוח
+    name  = extract_name(value, msg)                     # זיהוי שם הלקוח
     body  = (msg.get("text") or {}).get("body", "[לא טקסט]")
 
     print(f"\n📨 הודעה מ: {name} ({phone})")
     print(f"🕒 {get_time()} | 💬 {body}")
 
-    # הזמנה מלאה? שמירה ללוג (אפשר להרחיב לדוא״ל/CRM בהמשך)
+    # הזמנה מלאה? (תאריך, שעה, איסוף, יעד, נוסעים, מזוודות) – רק תיעוד ללוג כרגע
     if is_complete_booking(body):
         summary = (
             f"📥 הזמנה מלאה מהלקוח {name} ({phone}):\n\n{body}\n\n"
@@ -108,24 +108,29 @@ def opening_reply(lang):
     )
 
 
-# ===== שליחת הודעה דרך 360dialog =====
+# ===== שליחת הודעה דרך 360dialog (עם שדות נדרשים + לוג מלא) =====
 def send_reply(phone, text):
     if not ACCESS_TOKEN:
         print("⚠️ Missing WHATSAPP_TOKEN (D360-API-KEY) – cannot send reply")
         return
+
     url = "https://waba-v2.360dialog.io/v1/messages"
     headers = {
         "D360-API-KEY": ACCESS_TOKEN,
-        "Content-Type": "application/json"
+        "Content-Type": "application/json",
+        "Accept": "application/json",
     }
     payload = {
-        "to": phone,
+        "to": str(phone),
+        "recipient_type": "individual",
         "type": "text",
-        "text": {"body": text}
+        "text": {"body": str(text), "preview_url": False},
     }
+
     try:
         r = requests.post(url, headers=headers, json=payload, timeout=15)
-        print(f"📤 Reply sent → {r.status_code} | {r.text[:300]}")
+        print("➡️  Outgoing payload:", payload)
+        print(f"📤 Reply sent → {r.status_code} | {r.text}")
     except Exception as e:
         print("❌ Error sending reply:", e)
 
