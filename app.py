@@ -7,12 +7,14 @@ import pytz
 
 app = Flask(__name__)
 
-# קבועים
-VERIFY_TOKEN = "tayribot"
-ACCESS_TOKEN = os.environ.get("WHATSAPP_TOKEN")  # משתנה סביבה
-PHONE_NUMBER_ID = os.environ.get("PHONE_NUMBER_ID")  # משתנה סביבה
-REPLIED_USERS = set()  # למניעת תגובות כפולות
+# הגדרות כלליות
+VERIFY_TOKEN = "tayribot"  # שם הסוכן שלך
+ACCESS_TOKEN = os.environ.get("WHATSAPP_TOKEN")  # נשמר במשתני סביבה
+PHONE_NUMBER_ID = os.environ.get("PHONE_NUMBER_ID")  # גם כן משתנה סביבה
+REPLIED_USERS = set()  # כדי למנוע מענה כפול
 
+# אימות webhook מ-360dialog
+@app.route("/", methods=["GET", "POST"])
 @app.route("/webhook", methods=["GET", "POST"])
 def webhook():
     if request.method == "GET":
@@ -26,10 +28,11 @@ def webhook():
 
     if request.method == "POST":
         data = request.get_json()
-        log_to_file(data)  # שמירת כל שיחה
+        log_to_file(data)
         process_incoming_message(data)
         return "EVENT_RECEIVED", 200
 
+# עיבוד הודעה נכנסת
 def process_incoming_message(data):
     try:
         entry = data.get("entry", [])[0]
@@ -42,7 +45,7 @@ def process_incoming_message(data):
 
         message = messages[0]
         phone_number = message["from"]
-        name = message.get("profile", {}).get("name", "לא ידוע")
+        name = message["profile"]["name"]
         msg_body = message["text"]["body"] if "text" in message else "[לא טקסט]"
 
         print(f"\n📨 הודעה חדשה מ: {name} ({phone_number})")
@@ -58,10 +61,12 @@ def process_incoming_message(data):
     except Exception as e:
         print("❌ שגיאה:", e)
 
+# זיהוי עברית מול אנגלית
 def detect_language(text):
     heb_chars = set("אבגדהוזחטיכלמנסעפצקרשת")
     return "he" if any(c in heb_chars for c in text) else "en"
 
+# תגובה לפי שפה
 def generate_reply(lang):
     if lang == "he":
         return (
@@ -76,8 +81,9 @@ def generate_reply(lang):
             "How can I help you today?"
         )
 
+# שליחת הודעה בחזרה
 def send_reply(phone, text):
-    url = "https://waba-v2.360dialog.io/v1/messages"
+    url = f"https://waba-v2.360dialog.io/v1/messages"
     headers = {
         "D360-API-KEY": ACCESS_TOKEN,
         "Content-Type": "application/json"
@@ -88,25 +94,11 @@ def send_reply(phone, text):
         "text": {"body": text}
     }
     response = requests.post(url, headers=headers, json=payload)
-    print(f"📤 נשלחה תשובה: {response.status_code} | {response.text}")
+    print(f"📤 נשלחה תשובה: {response.status_code}")
 
+# תיעוד שיחה לקובץ
 def log_to_file(data):
     try:
         message = data.get("entry", [])[0].get("changes", [])[0].get("value", {}).get("messages", [])[0]
         phone = message["from"]
-        name = message.get("profile", {}).get("name", "לא ידוע")
-        body = message.get("text", {}).get("body", "[לא טקסט]")
-        time = get_il_time()
-
-        with open("log.txt", "a", encoding="utf-8") as f:
-            f.write(f"[{time}] {name} ({phone}): {body}\n")
-
-    except Exception as e:
-        print("❌ שגיאה בלוג:", e)
-
-def get_il_time():
-    return datetime.now(pytz.timezone("Asia/Jerusalem")).strftime("%Y-%m-%d %H:%M:%S")
-
-if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 5000))
-    app.run(host="0.0.0.0", port=port)
+        name = message["profile"]
