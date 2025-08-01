@@ -1,26 +1,71 @@
-from flask import Flask, request, make_response
+from flask import Flask, request
+import requests
 import json
 import os
-import pytz
-import requests
 from datetime import datetime
+import pytz
 
 app = Flask(__name__)
 
-VERIFY_TOKEN = os.environ.get("VERIFY_TOKEN", "tayribot")
-DIALOG_API_KEY = os.environ.get("DIALOG_API_KEY", "הכנס_כאן_את_הטוקן_שלך")
-PHONE_NUMBER_ID = os.environ.get("PHONE_NUMBER_ID", "הכנס_כאן_את_PhoneNumberID")
-LOG_FILE = "log.txt"
-RESPONDED_USERS = {}
+VERIFY_TOKEN = "tayribot"
+ACCESS_TOKEN = os.environ.get("WHATSAPP_TOKEN")
+PHONE_NUMBER_ID = os.environ.get("PHONE_NUMBER_ID")
+REPLIED_USERS = set()
 
-# זיהוי שפת ההודעה
+@app.route("/webhook", methods=["GET", "POST"])
+def webhook():
+    if request.method == "GET":
+        mode = request.args.get("hub.mode")
+        token = request.args.get("hub.verify_token")
+        challenge = request.args.get("hub.challenge")
+        if mode == "subscribe" and token == VERIFY_TOKEN:
+            return challenge, 200
+        return "Verification failed", 403
+
+    if request.method == "POST":
+        data = request.get_json()
+        if data:
+            process_message(data)
+        return "EVENT_RECEIVED", 200
+
+def process_message(data):
+    try:
+        entry = data.get("entry", [])[0]
+        change = entry.get("changes", [])[0]
+        value = change.get("value", {})
+        messages = value.get("messages", [])
+
+        if not messages:
+            return
+
+        msg = messages[0]
+        phone = msg["from"]
+        name = msg.get("profile", {}).get("name", "לא ידוע")
+        text = msg.get("text", {}).get("body", "")
+        timestamp = int(msg.get("timestamp", 0))
+
+        time_str = datetime.fromtimestamp(timestamp, pytz.timezone("Asia/Jerusalem")).strftime("%Y-%m-%d %H:%M:%S")
+
+        print(f"\n📩 הודעה חדשה מ: {name} ({phone})")
+        print(f"🕒 שעה: {time_str}")
+        print(f"💬 תוכן: {text}")
+
+        log_to_file(name, phone, text, time_str)
+
+        if phone not in REPLIED_USERS:
+            lang = detect_language(text)
+            reply = generate_reply(lang)
+            send_reply(phone, reply)
+            REPLIED_USERS.add(phone)
+
+    except Exception as e:
+        print(f"❌ שגיאה: {e}")
+
 def detect_language(text):
-    heb_chars = sum(1 for c in text if 'א' <= c <= 'ת')
-    eng_chars = sum(1 for c in text.lower() if 'a' <= c <= 'z')
-    return "he" if heb_chars >= eng_chars else "en"
+    heb_chars = set("אבגדהוזחטיכלמנסעפצקרשת")
+    return "he" if any(c in heb_chars for c in text) else "en"
 
-# נוסח פתיחה אוטומטי
-def get_opening_response(lang):
+def generate_reply(lang):
     if lang == "he":
         return (
             "היי! כאן הסוכן החכם של טיירי טורס\n"
@@ -30,85 +75,31 @@ def get_opening_response(lang):
     else:
         return (
             "Hi! This is the smart assistant of Tayri Tours\n"
-            "(Pilot response from a virtual agent under testing) 😊\n"
-            "How can I help you today? If you need a ride, feel free to send me your trip details for a quote."
+            "(Smart reply from a virtual agent – pilot testing) 😊\n"
+            "How can I help you today? If you need a ride, send me your trip details for a quote."
         )
 
-# שליחת תגובה אוטומטית
-def send_reply(phone_number, message):
-    url = "https://waba.360dialog.io/v1/messages"
+def send_reply(phone, text):
+    url = f"https://graph.facebook.com/v18.0/{PHONE_NUMBER_ID}/messages"
     headers = {
-        "D360-API-KEY": DIALOG_API_KEY,
+        "Authorization": f"Bearer {ACCESS_TOKEN}",
         "Content-Type": "application/json"
     }
     payload = {
-        "to": phone_number,
+        "messaging_product": "whatsapp",
+        "to": phone,
         "type": "text",
-        "text": {"body": message}
+        "text": {"body": text}
     }
     response = requests.post(url, headers=headers, json=payload)
-    print(f"[RESPONSE {response.status_code}] {response.text}")
-    return response.status_code == 200
+    print(f"📤 נשלחה תשובה ({response.status_code})")
 
-# תיעוד שיחה
-def log_message(entry):
-    with open(LOG_FILE, "a", encoding="utf-8") as f:
-        f.write(json.dumps(entry, ensure_ascii=False) + "\n")
-
-# אימות webhook מ־Meta
-@app.route("/", methods=["GET"])
-def verify():
-    token = request.args.get("hub.verify_token")
-    challenge = request.args.get("hub.challenge")
-    mode = request.args.get("hub.mode")
-    if token == VERIFY_TOKEN and mode == "subscribe":
-        return make_response(challenge, 200)
-    return make_response("Verification failed", 403)
-
-# קבלת הודעה
-@app.route("/", methods=["POST"])
-def webhook():
+def log_to_file(name, phone, text, time_str):
     try:
-        data = request.get_json()
-        entry = data['entry'][0]
-        changes = entry['changes'][0]
-        value = changes['value']
-        messages = value.get('messages')
-
-        if messages:
-            msg = messages[0]
-            text = msg.get('text', {}).get('body', '')
-            phone = msg.get('from')
-            timestamp = int(msg.get('timestamp'))
-
-            # תאריך עברי לפי אזור זמן ישראל
-            tz = pytz.timezone('Asia/Jerusalem')
-            dt = datetime.fromtimestamp(timestamp, tz)
-            readable_time = dt.strftime('%Y-%m-%d %H:%M:%S')
-
-            # שפה + מענה
-            lang = detect_language(text)
-            response_text = get_opening_response(lang)
-
-            # שליחת מענה רק פעם אחת
-            if phone not in RESPONDED_USERS:
-                send_reply(phone, response_text)
-                RESPONDED_USERS[phone] = datetime.now()
-
-            # שמירת תיעוד
-            log_message({
-                "time": readable_time,
-                "from": phone,
-                "lang": lang,
-                "message": text,
-                "response": response_text
-            })
-
+        with open("log.txt", "a", encoding="utf-8") as f:
+            f.write(f"[{time_str}] {name} ({phone}): {text}\n")
     except Exception as e:
-        print(f"[ERROR] {e}")
-        return make_response("Error", 500)
-
-    return make_response("EVENT_RECEIVED", 200)
+        print(f"❌ שגיאה בלוג: {e}")
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
