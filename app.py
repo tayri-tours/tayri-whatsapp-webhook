@@ -318,8 +318,40 @@ def send_reply_auto(wa_id, text):
 
 
 def send_via_360(wa_id, text) -> bool:
-    # 360dialog expects E.164 number WITHOUT '+'
-    to = re.sub(r"[^0-9]", "", str(wa_id))
+    # 360dialog expects E.164 number; some accounts require without '+', others with.
+    digits = re.sub(r"[^0-9]", "", str(wa_id))
+    tos = [digits, "+" + digits]
+    urls = [
+        "https://waba-v2.360dialog.io/v1/messages",
+        "https://waba.360dialog.io/v1/messages",
+    ]
+    headers = {
+        "D360-API-KEY": D360_API_KEY,
+        "Content-Type": "application/json",
+        "Accept": "application/json",
+    }
+    for url in urls:
+        for to in tos:
+            payload = {
+                "to": to,
+                "type": "text",
+                "text": {"body": str(text)}
+            }
+            try:
+                r = requests.post(url, headers=headers, json=payload, timeout=20)
+                trace = None
+                try:
+                    j = r.json()
+                    trace = j.get("360dialog_trace_id") or j.get("meta", {}).get("trace_id")
+                except Exception:
+                    pass
+                print(f"➡️  360 → {url} | to={to} | payload={payload}")
+                print(f"📤 360 response → {r.status_code} | trace_id={trace} | body={r.text}")
+                if r.status_code in (200, 201):
+                    return True
+            except Exception as e:
+                print("❌ Error sending via 360:", e)
+    return False
     urls = [
         "https://waba-v2.360dialog.io/v1/messages",
         "https://waba.360dialog.io/v1/messages",
