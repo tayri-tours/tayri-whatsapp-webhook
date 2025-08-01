@@ -384,10 +384,34 @@ def send_via_360(wa_id, text) -> bool:
         "Content-Type": "application/json",
         "Accept": "application/json",
     }
+    payload = {
+        "to": to,
+        "type": "text",
+        "text": {"body": str(text)}
+    }
+    for url in urls:
+        try:
+            r = requests.post(url, headers=headers, json=payload, timeout=20)
+            print(f"➡️  360 → {url} | payload={payload}")
+            print(f"📤 360 response → {r.status_code} | {r.text}")
+            if r.status_code in (200, 201):
+                return True
+        except Exception as e:
+            print("❌ Error sending via 360:", e)
+    return False
+    urls = [
+        "https://waba-v2.360dialog.io/v1/messages",
+        "https://waba.360dialog.io/v1/messages",
+    ]
+    headers = {
+        "D360-API-KEY": D360_API_KEY,
+        "Content-Type": "application/json",
+        "Accept": "application/json",
+    }
     payload_base = {
         "type": "text",
         "text": {"body": str(text)},  # מינימלי; ללא preview_url
-        "recipient_type": "individual",
+        
     }
     for url in urls:
         payload = {**payload_base, "to": to}
@@ -425,6 +449,17 @@ def send_via_360(wa_id, text) -> bool:
 #        UTILS / DEBUG
 # =========================
 
+@app.route("/debug/360")
+def debug_360():
+    if not D360_API_KEY:
+        return jsonify(ok=False, error="D360_API_KEY missing"), 500
+    to = request.args.get("to")
+    text = request.args.get("text", "בדיקה")
+    if not to:
+        return jsonify(ok=False, error="missing ?to=9725XXXXXXX"), 400
+    ok = send_via_360(to, text)
+    return jsonify(ok=ok)
+
 def get_time():
     return datetime.now(pytz.timezone(TIMEZONE)).strftime("%Y-%m-%d %H:%M:%S")
 
@@ -450,4 +485,5 @@ def debug_openai():
 if __name__ == "__main__":
     # For local testing only; Render will use its own server
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
+
 
