@@ -6,11 +6,11 @@ import pytz
 app = Flask(__name__)
 
 # ===== הגדרות =====
-VERIFY_TOKEN = "tayribot"                                  # חייב להתאים למה שהגדרת
-ACCESS_TOKEN = os.environ.get("WHATSAPP_TOKEN", "").strip()  # D360-API-KEY של 360dialog
+VERIFY_TOKEN = "tayribot"                                   # חייב להתאים למה שהגדרת
+ACCESS_TOKEN = os.environ.get("WHATSAPP_TOKEN", "").strip() # D360-API-KEY של 360dialog
 REPLIED_USERS = set()
 
-# ===== נתיב כללי: שורש + כל path (מונע 404 מכל כתובת) =====
+# ===== נתיב כללי: תופס "/" וכל path (מונע 404) =====
 @app.route("/", defaults={"path": ""}, methods=["GET", "POST"])
 @app.route("/<path:path>", methods=["GET", "POST"])
 def webhook(path):
@@ -43,13 +43,13 @@ def process_message(data):
 
     msg = messages[0]
     phone = msg.get("from", "unknown")
-    name = (msg.get("profile") or {}).get("name", "לא ידוע")
-    body = (msg.get("text") or {}).get("body", "[לא טקסט]")
+    name  = extract_name(value, msg)             # <<< תיקון זיהוי שם הלקוח
+    body  = (msg.get("text") or {}).get("body", "[לא טקסט]")
 
     print(f"\n📨 הודעה מ: {name} ({phone})")
     print(f"🕒 {get_time()} | 💬 {body}")
 
-    # הזמנה מלאה? שמירה ללוג בלבד (אפשר להחליף בהמשך לדוא״ל/CRM)
+    # הזמנה מלאה? שמירה ללוג (אפשר להרחיב לדוא״ל/CRM בהמשך)
     if is_complete_booking(body):
         summary = (
             f"📥 הזמנה מלאה מהלקוח {name} ({phone}):\n\n{body}\n\n"
@@ -64,6 +64,16 @@ def process_message(data):
         reply = opening_reply(lang)
         send_reply(phone, reply)
         REPLIED_USERS.add(phone)
+
+
+# ===== זיהוי שם הלקוח (contacts -> message.profile -> מספר) =====
+def extract_name(value, msg):
+    name = ((value.get("contacts") or [{}])[0].get("profile") or {}).get("name")
+    if not name:
+        name = (msg.get("profile") or {}).get("name")
+    if not name:
+        name = msg.get("from", "לא ידוע")
+    return name
 
 
 # ===== זיהוי אם הטקסט כולל כל רכיבי ההזמנה =====
