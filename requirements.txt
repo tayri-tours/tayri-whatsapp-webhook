@@ -1,5 +1,5 @@
-Flask
-requests
-pytz
-openai>=1.40.0
-gunicorn
+Flask==3.0.1
+requests>=2.31.0
+pytz>=2024.1
+openai==1.41.0
+gunicorn>=21.2.0
