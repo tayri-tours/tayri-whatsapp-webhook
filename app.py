@@ -9,7 +9,7 @@ client = None
 if OPENAI_API_KEY:
     try:
         from openai import OpenAI  # SDK הרשמי החדש
-        client = OpenAI(api_key=OPENAI_API_KEY)
+        client = OpenAI(api_key=OPENAI_API_KEY)  # ← ← ← התיקון בוצע כאן
     except Exception as e:
         print("⚠️ OpenAI SDK not available:", e)
 
@@ -17,7 +17,7 @@ app = Flask(__name__)
 
 # ---------- Config ----------
 VERIFY_TOKEN    = os.environ.get("VERIFY_TOKEN", "tayribot")
-ACCESS_TOKEN    = os.environ.get("WHATSAPP_TOKEN", "").strip()   # D360-API-KEY
+ACCESS_TOKEN    = os.environ.get("WHATSAPP_TOKEN", "").strip()
 TIMEZONE        = "Asia/Jerusalem"
 
 SESSIONS = {}
@@ -40,7 +40,6 @@ def webhook(path):
     except Exception as e:
         print("❌ Error:", e)
     return "EVENT_RECEIVED", 200
-
 
 def handle_message(data):
     entry    = (data.get("entry") or [{}])[0]
@@ -98,7 +97,6 @@ def handle_message(data):
         else:
             send_reply_auto(wa_id, thanks_reply(lang))
 
-
 BOOKING_SCHEMA = {
     "name": "booking",
     "schema": {
@@ -146,7 +144,6 @@ def extract_with_openai(text: str, lang: str) -> dict:
         print("⚠️ OpenAI extract error:", e)
         return extract_with_regex(text)
 
-
 DATE_RE = r"\b(\d{1,2}/\d{1,2}/\d{2,4})\b"
 TIME_RE = r"\b(\d{1,2}:\d{2})\b"
 PICKUP_RE = r"(?:איסוף|מאיסוף|מ-|מ־|מ |מרחוב|מרח׳)\s*([^\n,]+)"
@@ -166,17 +163,17 @@ def extract_with_regex(text: str) -> dict:
 
 def normalize_fields(obj: dict) -> dict:
     out = {}
-    for k in ["date","time","pickup","destination","passengers","luggage"]:
+    for k in ["date", "time", "pickup", "destination", "passengers", "luggage"]:
         if k in obj and obj[k]:
             out[k] = str(obj[k]).strip()
     return out
 
 def has_all_fields(d: dict) -> bool:
-    need = ["date","time","pickup","destination","passengers","luggage"]
+    need = ["date", "time", "pickup", "destination", "passengers", "luggage"]
     return all(d.get(k) for k in need)
 
 def missing_fields(d: dict):
-    order = ["date","time","pickup","destination","passengers","luggage"]
+    order = ["date", "time", "pickup", "destination", "passengers", "luggage"]
     return [k for k in order if not d.get(k)]
 
 def detect_language(text):
