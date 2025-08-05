@@ -2,3 +2,4 @@ Flask
 requests
 pytz
 openai>=1.40.0
+gunicorn
