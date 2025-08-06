@@ -57,7 +57,11 @@ def handle_message(data):
     sess = SESSIONS.setdefault(wa_id, {"stage": "start", "data": {}, "lang": lang, "name": name})
     sess["lang"], sess["name"] = lang, name
 
-    extracted = extract_with_openai(text, lang) if client and text else extract_with_regex(text)
+    extracted = {}
+    if client and text:
+        extracted = extract_with_openai(text, lang)
+    else:
+        extracted = extract_with_regex(text)
 
     for k, v in (extracted or {}).items():
         if v:
@@ -92,38 +96,62 @@ def handle_message(data):
         else:
             send_reply_auto(wa_id, thanks_reply(lang))
 
-# ---------- Extraction ----------
-BOOKING_FIELDS = ["date", "time", "pickup", "destination", "passengers", "luggage"]
+# ---------- OpenAI Extraction ----------
+BOOKING_SCHEMA = {
+    "name": "booking",
+    "schema": {
+        "type": "object",
+        "properties": {
+            "date": {"type": "string", "description": "תאריך בפורמט DD/MM/YYYY"},
+            "time": {"type": "string", "description": "שעה בפורמט HH:MM"},
+            "pickup": {"type": "string", "description": "כתובת איסוף מלאה"},
+            "destination": {"type": "string", "description": "יעד הנסיעה"},
+            "passengers": {"type": "string", "description": "מספר נוסעים"},
+            "luggage": {"type": "string", "description": "מספר מזוודות"}
+        },
+        "required": [],
+        "additionalProperties": False
+    },
+    "strict": True
+}
 
-def extract_with_openai(text, lang) -> dict:
+def extract_with_openai(text: str, lang: str) -> dict:
     try:
-        prompt = "Extract booking details into JSON: date, time, pickup, destination, passengers, luggage."
-        if lang == "he":
-            prompt = "חלץ פרטי הזמנה לקובץ JSON: תאריך, שעה, איסוף, יעד, נוסעים, מזוודות."
-        message = f"טקסט לקוח: {text}" if lang == "he" else f"Customer message: {text}"
+        system = ("You extract ride booking details into JSON fields: "
+                  "date (DD/MM/YYYY), time (HH:MM), pickup, destination, passengers, luggage. "
+                  "If something is missing, omit it.")
+        user = f"טקסט לקוח: {text}" if lang == "he" else f"Customer text: {text}"
 
-        response = client.chat.completions.create(
-            model="gpt-4.0-turbo",
+        resp = client.chat.completions.create(
+            model="gpt-4o",
             messages=[
-                {"role": "system", "content": prompt},
-                {"role": "user", "content": message},
-            ]
+                {"role": "system", "content": system},
+                {"role": "user", "content": user}
+            ],
+            tools=[{
+                "type": "function",
+                "function": {
+                    "name": "extract_booking",
+                    "parameters": BOOKING_SCHEMA["schema"]
+                }
+            }],
+            tool_choice="auto",
         )
-
-        content = response.choices[0].message.content
-        try:
+        tool_calls = resp.choices[0].message.tool_calls
+        if tool_calls and len(tool_calls) > 0:
+            args = tool_calls[0].function.arguments
             import json
-            data = json.loads(content)
-            return normalize_fields(data)
-        except:
-            return extract_with_regex(content)
+            out = json.loads(args)
+            return normalize_fields(out)
+        return {}
     except Exception as e:
         print("⚠️ OpenAI extract error:", e)
         return extract_with_regex(text)
 
+# ---------- Regex Fallback ----------
 DATE_RE = r"\b(\d{1,2}/\d{1,2}/\d{2,4})\b"
 TIME_RE = r"\b(\d{1,2}:\d{2})\b"
-PICKUP_RE = r"(?:איסוף|מ-|מרחוב|מרח׳)\s*([^\n,]+)"
+PICKUP_RE = r"(?:איסוף|מאיסוף|מ-|מ־|מ |מרחוב|מרח׳)\s*([^\n,]+)"
 DEST_RE = r"(?:יעד|ל |ל־)\s*([^\n,]+)"
 PAX_RE = r"\b(\d+)\s*נוסע(?:ים|ות)?\b"
 LUG_RE = r"\b(\d+)\s*מזוודות?\b"
@@ -138,32 +166,31 @@ def extract_with_regex(text: str) -> dict:
     m = re.search(LUG_RE, text);        d["luggage"] = m.group(1) if m else None
     return {k: v for k, v in d.items() if v}
 
+# ---------- Helpers ----------
 def normalize_fields(obj: dict) -> dict:
-    return {k: str(obj.get(k)).strip() for k in BOOKING_FIELDS if obj.get(k)}
+    out = {}
+    for k in ["date", "time", "pickup", "destination", "passengers", "luggage"]:
+        if k in obj and obj[k]:
+            out[k] = str(obj[k]).strip()
+    return out
 
-# ---------- Utils ----------
-def has_all_fields(d): return all(d.get(k) for k in BOOKING_FIELDS)
-def missing_fields(d): return [k for k in BOOKING_FIELDS if not d.get(k)]
+def has_all_fields(d: dict) -> bool:
+    return all(d.get(k) for k in ["date", "time", "pickup", "destination", "passengers", "luggage"])
 
-def detect_language(text): return "he" if any(c in set("אבגדהוזחטיכלמנסעפצקרשת") for c in text) else "en"
+def missing_fields(d: dict):
+    return [k for k in ["date", "time", "pickup", "destination", "passengers", "luggage"] if not d.get(k)]
 
-def extract_name(value, msg):
-    name = ((value.get("contacts") or [{}])[0].get("profile") or {}).get("name")
-    if not name:
-        name = (msg.get("profile") or {}).get("name")
-    return name or msg.get("from", "לקוח")
+def detect_language(text):
+    return "he" if any(c in set("אבגדהוזחטיכלמנסעפצקרשת") for c in text) else "en"
 
-def get_time():
-    return datetime.now(pytz.timezone(TIMEZONE)).strftime("%Y-%m-%d %H:%M:%S")
-
-# ---------- Replies ----------
 def opening_reply(lang):
-    return ("היי! כאן הסוכן החכם של טיירי טורס (פיילוט) 😊\n"
-            "כדי להכין הצעת מחיר אצטרך: תאריך, שעה, כתובת איסוף, יעד, מספר נוסעים ומספר מזוודות.\n"
-            "אפשר לכתוב הכול בהודעה אחת — ואם חסר, אשאל צעד-צעד.") if lang == "he" else \
-           ("Hi! I'm Tayri Tours smart agent (pilot) 😊\n"
+    if lang == "he":
+        return ("היי! כאן הסוכן החכם של טיירי טורס (פיילוט) 😊\n"
+                "כדי להכין הצעת מחיר אצטרך: תאריך, שעה, כתובת איסוף, יעד, מספר נוסעים ומספר מזוודות.\n"
+                "אפשר לכתוב הכול בהודעה אחת — ואם חסר, אשאל צעד-צעד.")
+    return ("Hi! I'm Tayri Tours smart agent (pilot) 😊\n"
             "To prepare a quote I need: date, time, pickup, destination, passengers, luggage.\n"
-            "You can write everything in one message — if something is missing, I’ll ask step by step.")
+            "Share everything in one message — if something is missing I’ll ask step by step.")
 
 def ask_for_next(missing, lang):
     nxt = missing[0]
@@ -218,9 +245,16 @@ def finalize_order(wa_id):
                 f"• Destination: {d.get('destination')}\n"
                 f"• Passengers: {d.get('passengers')}\n"
                 f"• Luggage: {d.get('luggage')}\n\n"
-                f"I’m sending this to the manager for quote approval and will get back to you shortly.")
+                f"I’m sending this to the manager for a quote approval and will get back to you shortly.")
 
-# ---------- Send via 360 ----------
+def extract_name(value, msg):
+    name = ((value.get("contacts") or [{}])[0].get("profile") or {}).get("name")
+    if not name:
+        name = (msg.get("profile") or {}).get("name")
+    if not name:
+        name = msg.get("from", "לא ידוע")
+    return name
+
 def send_reply_auto(wa_id, text):
     if not ACCESS_TOKEN:
         print("⚠️ Missing WHATSAPP_TOKEN – cannot send reply")
@@ -249,3 +283,6 @@ def send_via_360(wa_id, text) -> bool:
     except Exception as e:
         print(f"❌ Error sending via 360 ({url}):", e)
         return False
+
+def get_time():
+    return datetime.now(pytz.timezone(TIMEZONE)).strftime("%Y-%m-%d %H:%M:%S")
