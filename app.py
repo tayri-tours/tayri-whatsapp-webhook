@@ -185,12 +185,16 @@ def detect_language(text):
 
 def opening_reply(lang):
     if lang == "he":
-        return ("היי! כאן הסוכן החכם של טיירי טורס (פיילוט) 😊\n"
-                "כדי להכין הצעת מחיר אצטרך: תאריך, שעה, כתובת איסוף, יעד, מספר נוסעים ומספר מזוודות.\n"
-                "אפשר לכתוב הכול בהודעה אחת — ואם חסר, אשאל צעד-צעד.")
-    return ("Hi! I'm Tayri Tours smart agent (pilot) 😊\n"
-            "To prepare a quote I need: date, time, pickup, destination, passengers, luggage.\n"
-            "Share everything in one message — if something is missing I’ll ask step by step.")
+        return (
+            "היי! כאן הסוכן החכם של טיירי טורס (פיילוט) 😊\n"
+            "כדי להכין הצעת מחיר אצטרך: תאריך, שעה, כתובת איסוף, יעד, מספר נוסעים ומספר מזוודות.\n"
+            "אפשר לכתוב הכול בהודעה אחת — ואם חסר, אשאל צעד-צעד."
+        )
+    return (
+        "Hi! I'm Tayri Tours smart agent (pilot) 😊\n"
+        "To prepare a quote I need: date, time, pickup, destination, passengers, luggage.\n"
+        "Share everything in one message — if something is missing I’ll ask step by step."
+    )
 
 def ask_for_next(missing, lang):
     nxt = missing[0]
