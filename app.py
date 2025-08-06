@@ -259,17 +259,37 @@ def extract_name(value, msg):
         name = msg.get("from", "לא ידוע")
     return name
 
-def send_reply_auto(wa_id, text):
-    if not ACCESS_TOKEN:
-        print("❌ ACCESS_TOKEN not set – check your environment variables (WHATSAPP_TOKEN)")
-        return
-    send_via_360(wa_id, text)
-
 def send_via_360(wa_id, text) -> bool:
-    url = "https://waba.360dialog.io/messages"
+    url = "https://waba-v2.360dialog.io/messages"
     if not ACCESS_TOKEN:
         print("❌ Cannot send message – missing ACCESS_TOKEN")
         return False
+
+    headers = {
+        "D360-API-KEY": ACCESS_TOKEN,
+        "Content-Type": "application/json",
+        "Accept": "application/json",
+    }
+
+    payload = {
+        "messaging_product": "whatsapp",
+        "to": str(wa_id).lstrip("+"),
+        "type": "text",
+        "text": {
+            "body": str(text),
+            "preview_url": True
+        }
+    }
+
+    try:
+        r = requests.post(url, headers=headers, json=payload, timeout=20)
+        print(f"➡️  360 → {url} | payload={payload}")
+        print(f"📤 360 response → {r.status_code} | {r.text}")
+        return r.status_code in (200, 201)
+    except Exception as e:
+        print(f"❌ Error sending via 360 ({url}):", e)
+        return False
+
     headers = {
         "D360-API-KEY": ACCESS_TOKEN,
         "Content-Type": "application/json",
