@@ -2,6 +2,7 @@ from flask import Flask, request
 import os, re, requests
 from datetime import datetime
 import pytz
+import json
 
 # ---------- OpenAI ----------
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", "").strip()
@@ -140,7 +141,6 @@ def extract_with_openai(text: str, lang: str) -> dict:
         tool_calls = resp.choices[0].message.tool_calls
         if tool_calls and len(tool_calls) > 0:
             args = tool_calls[0].function.arguments
-            import json
             out = json.loads(args)
             return normalize_fields(out)
         return {}
@@ -261,12 +261,15 @@ def extract_name(value, msg):
 
 def send_reply_auto(wa_id, text):
     if not ACCESS_TOKEN:
-        print("⚠️ Missing WHATSAPP_TOKEN – cannot send reply")
+        print("❌ ACCESS_TOKEN not set – check your environment variables (WHATSAPP_TOKEN)")
         return
     send_via_360(wa_id, text)
 
 def send_via_360(wa_id, text) -> bool:
     url = "https://waba.360dialog.io/messages"
+    if not ACCESS_TOKEN:
+        print("❌ Cannot send message – missing ACCESS_TOKEN")
+        return False
     headers = {
         "D360-API-KEY": ACCESS_TOKEN,
         "Content-Type": "application/json",
