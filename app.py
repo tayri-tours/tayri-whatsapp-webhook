@@ -103,29 +103,59 @@ def get_session(user_id: str) -> Dict[str, Any]:
 # Messaging senders (360dialog / Meta Cloud)
 # ==========================
 
+def _normalize_to_number(raw: str, cloud: bool = False) -> str:
+    n = raw.replace("+", "").strip()
+    return n if cloud else ("+" + n)
+
+
 def send_whatsapp_text(to: str, body: str) -> requests.Response:
+    """Send a plain text message using one of the configured providers.
+    Supports:
+    - 360dialog On-Prem style (v1/messages)
+    - 360dialog Cloud style (waba-v2.360dialog.io/messages)
+    - Meta Cloud (Graph API /{PHONE_NUMBER_ID}/messages)
+    """
+    # Meta Cloud explicit flag wins
     if USE_META_CLOUD:
         url = f"https://graph.facebook.com/v20.0/{PHONE_NUMBER_ID}/messages"
         headers = {"Authorization": f"Bearer {META_TOKEN}", "Content-Type": "application/json"}
         payload = {
             "messaging_product": "whatsapp",
             "recipient_type": "individual",
-            "to": to if to.startswith("+") else "+" + to,
+            "to": _normalize_to_number(to, cloud=True),
             "type": "text",
             "text": {"body": body},
         }
         log_event({"direction": "out", "provider": "meta", "to": to, "payload": payload})
         return requests.post(url, headers=headers, json=payload, timeout=20)
-    else:
-        url = f"{D360_BASE_URL}/v1/messages"
+
+    # Decide between 360dialog Cloud vs On-Prem by base URL
+    base = (D360_BASE_URL or "").lower()
+    is_d360_cloud = "waba-v2.360dialog.io" in base
+
+    if is_d360_cloud:
+        # Cloud API mirrors Meta Cloud schema
+        url = f"{D360_BASE_URL.rstrip('/')}/messages"
         headers = {"D360-API-KEY": WHATSAPP_TOKEN, "Content-Type": "application/json"}
         payload = {
-            "to": to if to.startswith("+") else "+" + to,
+            "messaging_product": "whatsapp",
+            "to": _normalize_to_number(to, cloud=True),
             "type": "text",
             "text": {"body": body},
         }
-        log_event({"direction": "out", "provider": "360dialog", "to": to, "payload": payload})
+        log_event({"direction": "out", "provider": "360dialog-cloud", "to": to, "payload": payload})
         return requests.post(url, headers=headers, json=payload, timeout=20)
+
+    # Fallback: 360dialog On-Prem (legacy v1)
+    url = f"{D360_BASE_URL.rstrip('/')}/v1/messages"
+    headers = {"D360-API-KEY": WHATSAPP_TOKEN, "Content-Type": "application/json"}
+    payload = {
+        "to": _normalize_to_number(to, cloud=False),
+        "type": "text",
+        "text": {"body": body},
+    }
+    log_event({"direction": "out", "provider": "360dialog-onprem", "to": to, "payload": payload})
+    return requests.post(url, headers=headers, json=payload, timeout=20)
 
 
 # ==========================
@@ -495,13 +525,13 @@ def dispatch_approved_offer(price_nis: str) -> bool:
 # Webhook endpoints
 # ==========================
 
-@app.route("/", methods=["GET"])  # healthcheck
+@app.route("/", methods=["GET"])  # healthcheck alias
 @app.route("/health", methods=["GET"])
 def health():
     return jsonify({"ok": True, "time": datetime.utcnow().isoformat() + "Z"})
 
 
-@app.route("/webhook", methods=["GET"])
+@app.route("/webhook", methods=["GET"])  # VERIFY
 def verify():
     mode = request.args.get("hub.mode")
     token = request.args.get("hub.verify_token")
@@ -509,6 +539,12 @@ def verify():
     if mode == "subscribe" and token == VERIFY_TOKEN:
         return challenge or "", 200
     return "forbidden", 403
+
+
+# Safety net: if a provider posts to "/" by mistake, pass it to inbound()
+@app.route("/", methods=["POST"])  # <-- shim to avoid 405 when URL missing /webhook
+def root_post_passthrough():
+    return inbound()
 
 
 @app.route("/webhook", methods=["POST"])
