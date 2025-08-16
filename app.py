@@ -108,26 +108,58 @@ def _normalize_to_number(raw: str, cloud: bool = False) -> str:
     return n if cloud else ("+" + n)
 
 
-def send_whatsapp_text(to: str, body: str) -> requests.Response:
+def send_whatsapp_text(to: str, body: str) -> Optional[requests.Response]:
     """Send a plain text message using one of the configured providers.
-    Supports:
-    - 360dialog On-Prem style (v1/messages)
-    - 360dialog Cloud style (waba-v2.360dialog.io/messages)
-    - Meta Cloud (Graph API /{PHONE_NUMBER_ID}/messages)
+    Returns the requests.Response if sent, or None on error/disabled.
     """
-    # Meta Cloud explicit flag wins
-    if USE_META_CLOUD:
-        url = f"https://graph.facebook.com/v20.0/{PHONE_NUMBER_ID}/messages"
-        headers = {"Authorization": f"Bearer {META_TOKEN}", "Content-Type": "application/json"}
+    # Optional: disable outbound for testing
+    if os.getenv("DISABLE_OUTBOUND", "false").lower() == "true":
+        log_event({"direction": "out", "provider": "disabled", "to": to, "body": body})
+        return None
+    try:
+        # Meta Cloud explicit flag wins
+        if USE_META_CLOUD:
+            url = f"https://graph.facebook.com/v20.0/{PHONE_NUMBER_ID}/messages"
+            headers = {"Authorization": f"Bearer {META_TOKEN}", "Content-Type": "application/json"}
+            payload = {
+                "messaging_product": "whatsapp",
+                "recipient_type": "individual",
+                "to": _normalize_to_number(to, cloud=True),
+                "type": "text",
+                "text": {"body": body},
+            }
+            log_event({"direction": "out", "provider": "meta", "to": to, "payload": payload})
+            return requests.post(url, headers=headers, json=payload, timeout=20)
+
+        # Decide between 360dialog Cloud vs On-Prem by base URL
+        base = (D360_BASE_URL or "").lower()
+        is_d360_cloud = "waba-v2.360dialog.io" in base
+
+        if is_d360_cloud:
+            url = f"{D360_BASE_URL.rstrip('/')}/messages"
+            headers = {"D360-API-KEY": WHATSAPP_TOKEN, "Content-Type": "application/json"}
+            payload = {
+                "messaging_product": "whatsapp",
+                "to": _normalize_to_number(to, cloud=True),
+                "type": "text",
+                "text": {"body": body},
+            }
+            log_event({"direction": "out", "provider": "360dialog-cloud", "to": to, "payload": payload})
+            return requests.post(url, headers=headers, json=payload, timeout=20)
+
+        # Fallback: 360dialog On-Prem (legacy v1)
+        url = f"{D360_BASE_URL.rstrip('/')}/v1/messages"
+        headers = {"D360-API-KEY": WHATSAPP_TOKEN, "Content-Type": "application/json"}
         payload = {
-            "messaging_product": "whatsapp",
-            "recipient_type": "individual",
-            "to": _normalize_to_number(to, cloud=True),
+            "to": _normalize_to_number(to, cloud=False),
             "type": "text",
             "text": {"body": body},
         }
-        log_event({"direction": "out", "provider": "meta", "to": to, "payload": payload})
+        log_event({"direction": "out", "provider": "360dialog-onprem", "to": to, "payload": payload})
         return requests.post(url, headers=headers, json=payload, timeout=20)
+    except Exception as e:
+        log_event({"level": "error", "where": "send_whatsapp_text", "error": str(e)})
+        return None
 
     # Decide between 360dialog Cloud vs On-Prem by base URL
     base = (D360_BASE_URL or "").lower()
@@ -549,56 +581,51 @@ def root_post_passthrough():
 
 @app.route("/webhook", methods=["POST"])
 def inbound():
+    # Fast ACK: never block the provider. Process asynchronously.
     payload = request.get_json(force=True, silent=True) or {}
-    log_event({"direction": "in", "payload": payload})
 
-    # Try to normalize inbound across providers (360dialog and Meta Cloud are very similar)
-    # We will iterate over all message objects we can find.
-    msgs = []
-
-    # Meta style
-    try:
-        entry = payload.get("entry", [])
-        for e in entry:
-            for ch in e.get("changes", []):
-                v = ch.get("value", {})
-                for m in v.get("messages", []) or []:
-                    msgs.append(m)
-    except Exception:
-        pass
-
-    # 360dialog can also forward messages similarly; if not found, try root-level "messages"
-    if not msgs and "messages" in payload:
-        if isinstance(payload["messages"], list):
-            msgs.extend(payload["messages"])
-
-    # Process collected messages
-    for m in msgs:
-        from_meta = m.get("from") or m.get("author")
-        text = None
-        if m.get("type") == "text" and m.get("text"):
-            text = m["text"].get("body")
-        elif "button" in m:
-            text = m.get("button", {}).get("text")
-        elif m.get("interactive"):
-            # handle replies/selections if needed
-            interactive = m.get("interactive", {})
-            text = interactive.get("title") or interactive.get("text") or interactive.get("description")
-
-        if not from_meta or not text:
-            continue
-
-        # Owner approval path
-        if APPROVAL_MODE and from_meta.replace("+", "") == OWNER_PHONE:
-            price = handle_owner_message(text or "")
-            if price:
-                ok = dispatch_approved_offer(price)
-                send_whatsapp_text(OWNER_PHONE, "נשלח ללקוח ✅" if ok else "אין בקשות ממתינות")
+    def _process(p: Dict[str, Any]):
+        log_event({"direction": "in", "payload": p})
+        msgs = []
+        try:
+            entry = p.get("entry", [])
+            for e in entry:
+                for ch in e.get("changes", []):
+                    v = ch.get("value", {})
+                    for m in v.get("messages", []) or []:
+                        msgs.append(m)
+        except Exception:
+            pass
+        if not msgs and "messages" in p:
+            if isinstance(p["messages"], list):
+                msgs.extend(p["messages"])
+        for m in msgs:
+            from_meta = m.get("from") or m.get("author")
+            text = None
+            if m.get("type") == "text" and m.get("text"):
+                text = m["text"].get("body")
+            elif "button" in m:
+                text = m.get("button", {}).get("text")
+            elif m.get("interactive"):
+                interactive = m.get("interactive", {})
+                text = interactive.get("title") or interactive.get("text") or interactive.get("description")
+            if not from_meta or not text:
                 continue
+            if APPROVAL_MODE and from_meta.replace("+", "") == OWNER_PHONE:
+                price = handle_owner_message(text or "")
+                if price:
+                    ok = dispatch_approved_offer(price)
+                    send_whatsapp_text(OWNER_PHONE, "נשלח ללקוח ✅" if ok else "אין בקשות ממתינות")
+                    continue
+            user_id = from_meta.replace("+", "")
+            handle_logic(user_id, text)
 
-        # Customer
-        user_id = from_meta.replace("+", "")
-        handle_logic(user_id, text)
+    try:
+        import threading
+        threading.Thread(target=_process, args=(payload,), daemon=True).start()
+    except Exception:
+        # If threading fails for any reason, fall back to inline processing
+        _process(payload)
 
     return jsonify({"status": "ok"})
 
